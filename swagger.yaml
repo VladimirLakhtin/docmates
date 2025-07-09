@@ -1,0 +1,823 @@
+openapi: 3.0.0
+info:
+  title: Docmates API
+  description: API для системы управления документами с поиском и деревом.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000/api/v1 # Предполагаемый адрес API Gateway
+    description: Локальный сервер API Gateway
+
+tags:
+  - name: Authentication
+    description: Операции, связанные с аутентификацией и авторизацией пользователей.
+  - name: Admin
+    description: Операции администрирования ролей и пользователей.
+  - name: Tree
+    description: Операции по управлению иерархическим деревом документов и его разрешениями.
+  - name: Files
+    description: Операции по загрузке, скачиванию и удалению файлов.
+  - name: Indexing & Search
+    description: Операции по полнотекстовому поиску и управлению индексом документов.
+  - name: Gateway Internal
+    description: Внутренние эндпоинты, используемые API Gateway.
+
+paths:
+  /auth/login:
+    post:
+      summary: Аутентификация пользователя
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: user123
+                password:
+                  type: string
+                  format: password
+                  example: mysecretpassword
+      responses:
+        '200':
+          description: Успешная аутентификация
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                    example: bearer
+        '401':
+          description: Неверные учетные данные
+
+  /auth/verify_token:
+    post: # Используем POST для передачи токена в теле, если GET с заголовком Auth не подходит
+      summary: Проверка токена и получение ролей пользователя (используется API Gateway)
+      tags:
+        - Authentication
+        - Gateway Internal # Отмечаем, что этот эндпоинт предназначен для внутреннего использования
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: Токен для проверки
+      responses:
+        '200':
+          description: Токен действителен, возвращает информацию о пользователе и ролях
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: string
+                    format: uuid
+                  roles:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          description: Токен недействителен или просрочен
+
+  /admin/roles:
+    get:
+      summary: Получить список всех ролей
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Список ролей
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Role'
+        '403':
+          description: Недостаточно прав
+
+    post:
+      summary: Создать новую роль
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleCreate'
+      responses:
+        '201':
+          description: Роль успешно создана
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          description: Неверные данные запроса
+        '403':
+          description: Недостаточно прав
+
+  /admin/roles/{role_id}:
+    parameters:
+      - in: path
+        name: role_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+        description: Идентификатор роли
+    get:
+      summary: Получить роль по ID
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Детали роли
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '404':
+          description: Роль не найдена
+        '403':
+          description: Недостаточно прав
+    put:
+      summary: Обновить роль
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleUpdate'
+      responses:
+        '200':
+          description: Роль успешно обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          description: Неверные данные запроса
+        '404':
+          description: Роль не найдена
+        '403':
+          description: Недостаточно прав
+    delete:
+      summary: Удалить роль
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Роль успешно удалена
+        '404':
+          description: Роль не найдена
+        '403':
+          description: Недостаточно прав
+
+  /admin/users/{user_id}/roles:
+    parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+        description: Идентификатор пользователя
+    put:
+      summary: Назначить/обновить роли для пользователя
+      tags:
+        - Admin
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  example: ["a1b2c3d4-e5f6-7890-1234-567890abcdef"]
+      responses:
+        '200':
+          description: Роли пользователя успешно обновлены
+        '404':
+          description: Пользователь или роль не найдены
+        '403':
+          description: Недостаточно прав
+
+  /tree/nodes:
+    get:
+      summary: Получить список узлов дерева (например, корневые или дочерние)
+      tags:
+        - Tree
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: parent_id
+          schema:
+            type: string
+            format: uuid
+          required: false
+          description: ID родительского узла для получения дочерних элементов
+      responses:
+        '200':
+          description: Список узлов дерева
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TreeNode'
+        '403':
+          description: Недостаточно прав
+    post:
+      summary: Создать новый узел в дереве
+      tags:
+        - Tree
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TreeNodeCreate'
+      responses:
+        '201':
+          description: Узел успешно создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeNode'
+        '400':
+          description: Неверные данные запроса
+        '403':
+          description: Недостаточно прав
+
+  /tree/nodes/{node_id}:
+    parameters:
+      - in: path
+        name: node_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+        description: Идентификатор узла дерева
+    get:
+      summary: Получить детали узла дерева по ID
+      tags:
+        - Tree
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Детали узла
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeNode'
+        '404':
+          description: Узел не найден
+        '403':
+          description: Недостаточно прав
+    put:
+      summary: Обновить узел дерева
+      tags:
+        - Tree
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TreeNodeUpdate'
+      responses:
+        '200':
+          description: Узел успешно обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeNode'
+        '400':
+          description: Неверные данные запроса
+        '404':
+          description: Узел не найден
+        '403':
+          description: Недостаточно прав
+    delete:
+      summary: Удалить узел дерева
+      tags:
+        - Tree
+      description: Если узел является документом, связанный файл также будет удален.
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Узел успешно удален
+        '404':
+          description: Узел не найден
+        '403':
+          description: Недостаточно прав
+
+  /tree/nodes/{node_id}/permissions:
+    parameters:
+      - in: path
+        name: node_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+        description: Идентификатор узла дерева
+    put:
+      summary: Установить разрешения для узла дерева
+      tags:
+        - Tree
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                permissions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/NodePermission'
+      responses:
+        '200':
+          description: Разрешения успешно обновлены
+        '404':
+          description: Узел не найден
+        '403':
+          description: Недостаточно прав
+
+  /tree/filter_by_permissions:
+    post: # Используем POST, так как передаются списки ID и ролей
+      summary: Фильтровать список идентификаторов документов по правам доступа (для внутреннего использования Indexing Service)
+      tags:
+        - Tree
+      description: Принимает список идентификаторов документов и роли пользователя, возвращает отфильтрованный список доступных ID.
+      security:
+        - BearerAuth: [] # Внутренний вызов, но может требовать аутентификации сервиса.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: Список ID документов для проверки.
+                user_roles:
+                  type: array
+                  items:
+                    type: string
+                  description: Роли пользователя, осуществляющего запрос.
+              required:
+                - document_ids
+                - user_roles
+      responses:
+        '200':
+          description: Отфильтрованный список идентификаторов доступных документов.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed_document_ids:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+        '400':
+          description: Неверные данные запроса.
+        '403':
+          description: Недостаточно прав (если сервис-вызыватель не авторизован для этой операции).
+
+
+  /files/upload:
+    post:
+      summary: Загрузить новый файл
+      tags:
+        - Files
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Загружаемый файл
+                filename:
+                  type: string
+                  description: Имя файла (опционально, если не в Content-Disposition)
+      responses:
+        '201':
+          description: Файл успешно загружен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file_id:
+                    type: string
+                    format: uuid
+                    description: Идентификатор загруженного файла
+                  filename:
+                    type: string
+        '400':
+          description: Неверные данные запроса
+        '403':
+          description: Недостаточно прав
+
+  /files/download/{file_id}:
+    get:
+      summary: Скачать файл по ID
+      tags:
+        - Files
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: file_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: Идентификатор файла для скачивания
+      responses:
+        '200':
+          description: Файл успешно скачан
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Файл не найден
+        '403':
+          description: Недостаточно прав
+
+  /files/{file_id}:
+    delete:
+      summary: Удалить файл по ID
+      tags:
+        - Files
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: file_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: Идентификатор файла для удаления
+      responses:
+        '204':
+          description: Файл успешно удален
+        '404':
+          description: Файл не найден
+        '403':
+          description: Недостаточно прав
+
+  /index/document:
+    post:
+      summary: Проиндексировать новый документ
+      tags:
+        - Indexing & Search
+      security:
+        - BearerAuth: [] # Хотя это может быть внутренний вызов, для полноты можно указать.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentIndexRequest'
+      responses:
+        '200':
+          description: Документ успешно проиндексирован
+        '400':
+          description: Неверные данные запроса
+
+  /index/document/{doc_id}:
+    put:
+      summary: Обновить индексированный документ
+      tags:
+        - Indexing & Search
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: doc_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: Идентификатор документа в индексе
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentIndexRequest' # Можно использовать ту же схему или более легкую для обновления
+      responses:
+        '200':
+          description: Документ в индексе успешно обновлен
+        '404':
+          description: Документ не найден в индексе
+        '400':
+          description: Неверные данные запроса
+    delete:
+      summary: Удалить документ из индекса
+      tags:
+        - Indexing & Search
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: doc_id
+          schema:
+            type: string
+            format: uuid
+          required: true
+          description: Идентификатор документа для удаления из индекса
+      responses:
+        '204':
+          description: Документ успешно удален из индекса
+        '404':
+          description: Документ не найден в индексе
+
+  /search:
+    get:
+      summary: Полнотекстовый поиск по документам
+      tags:
+        - Indexing & Search
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          required: true
+          description: Поисковый запрос
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+          description: Номер страницы результатов
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+          description: Количество результатов на странице
+      responses:
+        '200':
+          description: Результаты поиска
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SearchResult'
+        '400':
+          description: Неверный поисковый запрос
+        '403':
+          description: Недостаточно прав
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Role:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          example: 123e4567-e89b-12d3-a456-426614174000
+        name:
+          type: string
+          example: administrator
+        description:
+          type: string
+          nullable: true
+          example: Полные права доступа ко всем функциям.
+    RoleCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: editor
+        description:
+          type: string
+          nullable: true
+          example: Может редактировать документы.
+      required:
+        - name
+    RoleUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: viewer
+        description:
+          type: string
+          nullable: true
+          example: Только просмотр документов.
+
+    TreeNode:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          example: 123e4567-e89b-12d3-a456-426614174001
+        name:
+          type: string
+          example: Мои Документы
+        type:
+          type: string
+          enum: [folder, document]
+          example: folder
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          example: null
+        file_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID файла, если узел является документом
+          example: 123e4567-e89b-12d3-a456-426614174002
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+    TreeNodeCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Новый Договор
+        type:
+          type: string
+          enum: [folder, document]
+          example: document
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          example: 123e4567-e89b-12d3-a456-426614174000
+        file_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID файла, если узел является документом
+          example: 123e4567-e89b-12d3-a456-426614174002
+      required:
+        - name
+        - type
+    TreeNodeUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Измененный Договор
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          example: 123e4567-e89b-12d3-a456-426614174003
+    NodePermission:
+      type: object
+      properties:
+        role_id:
+          type: string
+          format: uuid
+          description: ID роли, которой дается разрешение
+          example: a1b2c3d4-e5f6-7890-1234-567890abcdef
+        can_read:
+          type: boolean
+          example: true
+        can_write:
+          type: boolean
+          example: false
+        can_delete:
+          type: boolean
+          example: false
+      required:
+        - role_id
+        - can_read
+        - can_write
+        - can_delete
+
+    DocumentIndexRequest:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+          description: Уникальный ID документа (часто совпадает с file_id или tree_node_id)
+          example: 123e4567-e89b-12d3-a456-426614174002
+        content:
+          type: string
+          description: Полное текстовое содержимое документа
+        metadata:
+          type: object
+          description: Любые дополнительные метаданные для индексации (например, title, author, tags)
+          additionalProperties: true
+          example:
+            title: "Отчет о продажах за Q1"
+            author: "Иванов И.И."
+            tags: ["Отчет", "Продажи", "Q1"]
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePermission' # Разрешения, которые Indexing Service может использовать для фильтрации
+          description: Разрешения, применимые к этому документу, для фильтрации результатов поиска.
+
+    SearchResult:
+      type: object
+      properties:
+        doc_id:
+          type: string
+          format: uuid
+          example: 123e4567-e89b-12d3-a456-426614174002
+        title:
+          type: string
+          example: Договор поставки №123
+        path:
+          type: string
+          example: /Папки/Финансы/Договоры/Договор поставки №123.pdf
+        score:
+          type: number
+          format: float
+          description: Релевантность результата поиска
+          example: 0.85
+        snippet:
+          type: string
+          description: Краткий отрывок текста, содержащий поисковый запрос
+          example: "...Настоящий **договор** вступает в силу..."
