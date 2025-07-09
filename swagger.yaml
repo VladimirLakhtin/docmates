@@ -56,6 +56,65 @@ paths:
                     example: bearer
         '401':
           description: Неверные учетные данные
+  /auth/refresh_token:
+    post:
+      summary: Обновление токена доступа с использованием refresh-токена
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: Долгоживущий токен для получения нового access_token.
+              required:
+                - refresh_token
+      responses:
+        '200':
+          description: Токен доступа успешно обновлен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    description: Новый короткоживущий токен доступа.
+                  token_type:
+                    type: string
+                    example: bearer
+                  refresh_token:
+                    type: string
+                    description: (Опционально) Новый refresh_token, если используется ротация.
+        '401':
+          description: Недействительный или истекший refresh_token
+
+  /auth/logout:
+    post:
+      summary: Выход из системы и аннулирование refresh-токена
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: [] # Токен доступа для идентификации пользователя
+      requestBody:
+        required: false # Можно отозвать все токены пользователя или конкретный
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: (Опционально) Конкретный refresh_token для аннулирования. Если не указан, аннулируются все refresh_токены для текущего пользователя.
+      responses:
+        '204':
+          description: Успешный выход из системы (токен(ы) аннулированы)
+        '401':
+          description: Неавторизованный запрос или недействительный токен
 
   /auth/verify_token:
     post: # Используем POST для передачи токена в теле, если GET с заголовком Auth не подходит
